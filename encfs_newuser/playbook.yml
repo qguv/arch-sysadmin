@@ -1,0 +1,67 @@
+- hosts: localhost
+  name: install packages
+  tasks:
+
+  - name: install encfs
+    sudo: true
+    pacman: name=encfs
+
+  - name: install encfs mount-on-login authentication package (pulls in encfs too)
+    command: pacaur -Saq --needed --noconfirm pam_encfs
+
+- hosts: localhost
+  name: prepare environment for encfs/fuse/pam
+  sudo: true
+  tasks:
+
+  - name: make fuse available to all users
+    lineinfile: dest=/etc/fuse.conf regexp="^\s*user_allow_other" line="user_allow_other"
+
+  - name: set up pam_encfs for all login methods
+    lineinfile: dest=/etc/pam.d/system-login regexp="\spam_encfs.so" line="auth sufficient pam_encfs.so"
+
+  - name: automount encfs on vterm login
+    copy: src=pam_login.txt dest=/etc/pam.d/login
+
+  - name: configure PAM with encfs' fuse-type mounting options
+    copy: src=pam_encfs.conf dest=/etc/security/pam_encfs.conf
+
+  - name: make fuse group
+    group: name=fuse
+
+- hosts: localhost
+  sudo: true
+  name: prepare the new user
+
+  vars:
+    encfs_dir: /home/.encfs
+    homes_dir: /home
+
+  vars_prompt:
+    - name: "new_username"
+      prompt: "new username"
+
+  tasks:
+
+  - name: make the new user
+    user: name={{ new_username }} createhome=no
+
+  - name: add new user to group fuse
+    user: name={{ new_username }} append=true group=fuse
+
+  - name: create encrypted and decrypted home directories and their containing directories
+    file: state=directory dest={{ item.dir }} mode={{ item.mode }} owner={{ item.user }} group={{ item.user }}
+    with_items:
+      - { dir: "{{ encfs_dir }}", user: "root", mode: "u=rwx,go=rx" }
+      - { dir: "{{ homes_dir }}", user: "root", mode: "u=rwx,go=rx" }
+
+  - name: add new user to encfs list
+    lineinfile: dest=/etc/security/pam_encfs.conf regexp="^{{ new_username }}\s" line="{{ new_username }} {{ encfs_dir }}/{{ new_username }} {{ homes_dir }}/{{ new_username }} -v allow_other"
+
+  #- name: create secure home directory for the new user
+  #remote_user: "{{ new_username }}"
+  #shell: yes | encfs {{ encfs_dir }}/{{ new_username }} {{ homes_dir }}/{{ new_username }}
+
+  #- name: populate the new home directory
+  #remote_user: "{{ new_username }}"
+  #command: cp -r --no-preserve=ownership /etc/skel {{ homes_dir }}/{{ my_username }}
